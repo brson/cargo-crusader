@@ -1,0 +1,9 @@
+[package]
+name = "crusadertest2"
+version = "0.1.0"
+authors = ["Brian Anderson <banderson@mozilla.com>"]
+description = "Test crate for cargo-crusader"
+license = "MIT/Apache-2.0"
+
+[dependencies]
+crusadertest1 = "0.1.0"

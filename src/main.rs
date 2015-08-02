@@ -1,3 +1,4 @@
+extern crate curl;
 extern crate env_logger;
 #[macro_use]
 extern crate log;
@@ -18,8 +19,7 @@ fn main() {
 }
 
 fn run() -> Result<TestResults, Error> {
-    let options = try!(parse_options());
-    let config = try!(get_config(options));
+    let config = try!(get_config());
 
     let rev_deps = try!(get_rev_deps(&config.crate_name));
     let crates = try!(acquire_crates(&config));
@@ -36,30 +36,6 @@ fn run() -> Result<TestResults, Error> {
     }
 }
 
-enum Options {
-    Implicit,
-    Base(Version),
-    Explicit(Version, Version)
-}
-
-fn parse_options() -> Result<Options, Error> {
-    let args = env::args().collect::<Vec<_>>();
-    if args.len() < 2 {
-        Ok(Options::Implicit)
-    } else if args.len() < 3 {
-        Ok(Options::Base(try!(parse_rev(&args[1]))))
-    } else if args.len() == 3 {
-        Ok(Options::Explicit(try!(parse_rev(&args[1])),
-                             try!(parse_rev(&args[2]))))
-    } else {
-        Err(Error::BadArgs)
-    }
-}
-
-fn parse_rev(s: &str) -> Result<Version, Error> {
-    Ok(try!(Version::parse(s)))
-}
-
 struct Config {
     manifest_path: PathBuf,
     crate_name: String,
@@ -68,45 +44,25 @@ struct Config {
 }
 
 enum Origin {
-    Published(Version),
+    Published,
     Source(PathBuf)
 }
 
 type VersionNumber = String;
 
-fn get_config(options: Options) -> Result<Config, Error> {
+fn get_config() -> Result<Config, Error> {
     let manifest = env::var("CRUSADER_MANIFEST");
     let manifest = manifest.unwrap_or_else(|_| "./Cargo.toml".to_string());
     let manifest = PathBuf::from(manifest);
+    info!("Using manifest {:?}", manifest);
 
     let source_name = try!(get_crate_name(&manifest));
-    match options {
-        Options::Implicit => {
-            let rev = try!(get_most_recent_rev(&source_name));
-            Ok(Config {
-                manifest_path: manifest.clone(),
-                crate_name: source_name,
-                base_origin: Origin::Published(rev),
-                next_origin: Origin::Source(manifest)
-            })
-        }
-        Options::Base(base_rev) => {
-            Ok(Config {
-                manifest_path: manifest.clone(),
-                crate_name: source_name,
-                base_origin: Origin::Published(base_rev),
-                next_origin: Origin::Source(manifest)
-            })
-        }
-        Options::Explicit(base_rev, next_rev) => {
-            Ok(Config {
-                manifest_path: manifest.clone(),
-                crate_name: source_name,
-                base_origin: Origin::Published(base_rev),
-                next_origin: Origin::Published(next_rev)
-            })
-        }
-    }
+    Ok(Config {
+        manifest_path: manifest.clone(),
+        crate_name: source_name,
+        base_origin: Origin::Published,
+        next_origin: Origin::Source(manifest)
+    })
 }
 
 fn get_crate_name(manifest_path: &Path) -> Result<String, Error> {
@@ -143,14 +99,10 @@ fn load_string(path: &Path) -> Result<String, Error> {
     Ok(s)
 }
 
-fn get_most_recent_rev(crate_name: &str) -> Result<Version, Error> {
-    // TODO
-    Ok(try!(Version::parse("0.0.0")))
-}
-
 struct RevDep;
 
 fn get_rev_deps(crate_name: &str) -> Result<Vec<RevDep>, Error> {
+    info!("Getting reverse deps for {}", crate_name);
     unimplemented!()
 }
 
