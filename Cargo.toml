@@ -2,6 +2,11 @@
 name = "cargo-crusader"
 version = "0.1.0"
 authors = ["Brian Anderson <banderson@mozilla.com>"]
+description = "Test the downstream impact of crate changes before publishing"
+license = "MIT/Apache-2.0"
 
 [dependencies]
 semver = "0.1.20"
+toml = "0.1.21"
+log = "0.3.1"
+env_logger = "0.3.1"
