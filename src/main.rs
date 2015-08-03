@@ -10,6 +10,7 @@ use curl::{http, ErrCode};
 use curl::http::Response as CurlHttpResponse;
 use rustc_serialize::json;
 use semver::Version;
+use std::cell::RefCell;
 use std::convert::From;
 use std::env;
 use std::fmt;
@@ -29,7 +30,7 @@ fn run() -> Result<TestResults, Error> {
 
     let rev_deps = try!(get_rev_deps(&config.crate_name));
     let crates = try!(acquire_crates(&config));
-    let results = TestResults::new();
+    let mut results = TestResults::new();
     for rev_dep in rev_deps {
         let result = run_test(&crates.base, &crates.next, rev_dep);
         results.add(result);
@@ -169,34 +170,87 @@ fn acquire_crate(origin: &Origin) -> CrateOverride {
 }
 
 #[derive(Debug)]
-struct TestResults;
+struct TestResults {
+    r: Vec<TestResultFuture>
+}
 
 impl TestResults {
     fn new() -> TestResults {
-        unimplemented!()
+        TestResults {
+            r: Vec::new()
+        }
     }
 
-    fn add(&self, result: TestResultFuture) {
-        unimplemented!()
+    fn add(&mut self, result: TestResultFuture) {
+        self.r.push(result);
     }
 
-    fn failed(&self) -> bool {
-        unimplemented!()
+    fn failed(&mut self) -> bool {
+        for r in &self.r {
+            if r.failed() {
+                return true;
+            }
+        }
+
+        return false;
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum TestResult {
     Broken(CompileResult),
     Fail(CompileResult, CompileResult),
     Pass(CompileResult, CompileResult)
 }
 
-#[derive(Debug)]
-struct TestResultFuture;
+struct TestResultFuture(RefCell<TestResultState>);
+
+enum TestResultState {    
+    Unresolved(Receiver<TestResult>),
+    Resolved(TestResult)
+}
+
+impl TestResultFuture {
+    fn get(&self) -> TestResult {
+        let TestResultFuture(ref cell) = *self;
+        let r: & mut TestResultState = &mut *cell.borrow_mut();
+        let s: Option<TestResult> = match *r {
+            TestResultState::Unresolved(ref rx) => Some(rx.recv().unwrap()),
+            TestResultState::Resolved(ref r) => {
+                // FIXME: Bad clone
+                return r.clone();
+            }
+        };
+
+        if let Some(t) = s {
+            *r = TestResultState::Resolved(t);
+        }
+
+        self.get()
+    }
+    fn failed(&self) -> bool {
+        self.get().failed()
+    }
+}
+
+impl TestResult {
+    fn failed(&self) -> bool {
+        match *self {
+            TestResult::Fail(..) => true,
+            _ => false
+        }
+    }
+}
+
+impl fmt::Debug for TestResultFuture {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        self.get().fmt(fmt)
+    }
+}
 
 fn new_result_future() -> (Sender<TestResult>, TestResultFuture) {
-    unimplemented!()
+    let (tx, rx) = mpsc::channel();
+    (tx, TestResultFuture(RefCell::new(TestResultState::Unresolved(rx))))
 }
 
 fn run_test(base_crate: &CrateOverride, next_crate: &CrateOverride, rev_dep: RevDep) -> TestResultFuture {
@@ -229,7 +283,7 @@ fn run_test_local(base_crate: &CrateOverride, next_crate: &CrateOverride, ref re
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct CompileResult {
     stdout: String,
     stderr: String,
