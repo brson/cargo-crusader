@@ -1,11 +1,10 @@
 # Cargo Crusader
 
-Hark, Rust crate author! The battle for Rust's reputation as The Most
-Reliable Software Platform Ever is here, and nobody is free of
-responsibility. You! Dear Rustacean are responsible for the future of
-Rust.
+Hark, Rust crate author! The battle for Rust's reputation as *The Most
+Reliable Software Platform Ever* is here, and nobody is free of
+responsibility. The future of Rust, dear Rustilian, is in your hands.
 
-Join the Cargo Crusade and bring the [Theory of Responsible API
+Join the **Cargo Crusade** and bring the [Theory of Responsible API
 Evolution][evo] to the non-believers.
 
 Cargo Crusader is a tool to help crate authors evaluate the impact of
