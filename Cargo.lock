@@ -5,8 +5,10 @@ dependencies = [
  "curl 0.2.10 (registry+https://github.com/rust-lang/crates.io-index)",
  "env_logger 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "num_cpus 0.2.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "rustc-serialize 0.3.15 (registry+https://github.com/rust-lang/crates.io-index)",
  "semver 0.1.20 (registry+https://github.com/rust-lang/crates.io-index)",
+ "threadpool 0.1.4 (registry+https://github.com/rust-lang/crates.io-index)",
  "toml 0.1.21 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
@@ -114,6 +116,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "num_cpus"
+version = "0.2.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+dependencies = [
+ "libc 0.1.8 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
 name = "openssl-sys"
 version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -179,6 +189,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "rand 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
+
+[[package]]
+name = "threadpool"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
 name = "toml"
