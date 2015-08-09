@@ -293,6 +293,8 @@ fn run_test(pool: &mut ThreadPool,
 }
 
 fn run_test_local(base_crate: &CrateOverride, next_crate: &CrateOverride, rev_dep: RevDepName) -> TestResult {
+
+    // First, figure get the most recent version number
     let rev_dep = match resolve_rev_dep_version(rev_dep.clone()) {
         Ok(r) => r,
         Err(e) => {
@@ -303,6 +305,9 @@ fn run_test_local(base_crate: &CrateOverride, next_crate: &CrateOverride, rev_de
             return TestResult::error(rev_dep, e);
         }
     };
+
+    info!("testing rev dep: {:?}", rev_dep);
+
     let base_result = compile_with_custom_dep(&rev_dep, base_crate);
 
     if base_result.failed() {
@@ -328,8 +333,13 @@ fn resolve_rev_dep_version(name: RevDepName) -> Result<RevDep, Error> {
         .filter_map(|r| Version::parse(&*r.num).ok());
     let mut versions = versions.collect::<Vec<_>>();
     versions.sort();
-    println!("{:?}", versions);
-    unimplemented!()
+
+    versions.pop().map(|v| {
+        RevDep {
+            name: name,
+            vers: v
+        }
+    }).ok_or(Error::NoCrateVersions)
 }
 
 // The server returns much more info than this.
@@ -383,7 +393,8 @@ enum Error {
     HttpError(CurlHttpResponseWrapper),
     Utf8Error(Utf8Error),
     JsonDecode(json::DecoderError),
-    RecvError(RecvError)
+    RecvError(RecvError),
+    NoCrateVersions
 }
 
 impl From<semver::ParseError> for Error {
