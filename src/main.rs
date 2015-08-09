@@ -330,6 +330,9 @@ fn run_test_local(base_crate: &CrateOverride, next_crate: &CrateOverride, rev_de
 
     debug!("testing rev dep: {:?}", rev_dep);
 
+    // TODO: Decide whether the version of our crate requested by the
+    // rev dep is semver-compatible with the in-development version.
+    
     let base_result = match compile_with_custom_dep(&rev_dep, base_crate) {
         Ok(r) => r,
         Err(e) => return TestResult::error(rev_dep, e)
@@ -402,23 +405,25 @@ impl CompileResult {
 fn compile_with_custom_dep(rev_dep: &RevDep, krate: &CrateOverride) -> Result<CompileResult, Error> {
     let ref crate_handle = try!(get_crate_handle(rev_dep));
     let temp_dir = try!(TempDir::new("crusader"));
-    let source_dir = temp_dir.path().join("source");
-    try!(fs::create_dir(&*source_dir));
-    try!(crate_handle.unpack_source_to(&*source_dir));
+    let ref source_dir = temp_dir.path().join("source");
+    try!(fs::create_dir(source_dir));
+    try!(crate_handle.unpack_source_to(source_dir));
 
     match *krate {
         CrateOverride::Default => (),
         CrateOverride::Source(ref path) => {
-            unimplemented!()
+            // Emit a .cargo/config file to override the project's
+            // dependency on *our* project with the WIP.
+            try!(emit_cargo_override_path(source_dir, path));
         }
     }
 
-    let manifest = source_dir.join("Cargo.toml");
-    let manifest = manifest.to_str().unwrap().to_owned();
+    // NB: The way cargo searches for .cargo/config, which we use to
+    // override dependencies, depends on the CWD, and is not affacted
+    // by the --manifest-path flag, so this is changing directories.
     let mut cmd = Command::new("cargo");
     let cmd = cmd.arg("build")
-        .arg("--manifest-path")
-        .arg(manifest);
+        .current_dir(source_dir);
     debug!("running cargo: {:?}", cmd);
     let r = try!(cmd.output());
 
@@ -437,8 +442,8 @@ struct CrateHandle(PathBuf);
 
 fn get_crate_handle(rev_dep: &RevDep) -> Result<CrateHandle, Error> {
     let cache_path = Path::new("./.crusader/crate-cache");
-    let crate_dir = cache_path.join(&rev_dep.name);
-    try!(fs::create_dir_all(&crate_dir));
+    let ref crate_dir = cache_path.join(&rev_dep.name);
+    try!(fs::create_dir_all(crate_dir));
     let crate_file = crate_dir.join(format!("{}-{}.crate", rev_dep.name, rev_dep.vers));
     // FIXME: Path::exists() is unstable so just opening the file
     let crate_file_exists = File::open(&crate_file).is_ok();
@@ -449,6 +454,7 @@ fn get_crate_handle(rev_dep: &RevDep) -> Result<CrateHandle, Error> {
         // FIXME: Should move this into place atomically
         let mut file = try!(File::create(&crate_file));
         try!(file.write_all(&body));
+        try!(file.flush());
     }
 
     return Ok(CrateHandle(crate_file));
@@ -474,6 +480,30 @@ impl CrateHandle {
             Err(Error::ProcessError(s))
         }
     }
+}
+
+fn emit_cargo_override_path(source_dir: &Path, override_path: &Path) -> Result<(), Error> {
+    debug!("overriding cargo path in {:?} with {:?}", source_dir, override_path);
+
+    assert!(override_path.ends_with("Cargo.toml"));
+    let override_path = override_path.parent().unwrap();
+
+    // Since cargo is going to be run with --manifest-path to change
+    // directories a relative path is not going to make sense.
+    let override_path = if override_path.is_absolute() {
+        override_path.to_path_buf()
+    } else {
+        try!(env::current_dir()).join(override_path)
+    };
+    let ref cargo_dir = source_dir.join(".cargo");
+    try!(fs::create_dir_all(cargo_dir));
+    let ref config_path = cargo_dir.join("config");
+    let mut file = try!(File::create(config_path));
+    let s = format!(r#"paths = ["{}"]"#, override_path.to_str().unwrap());
+    try!(file.write_all(s.as_bytes()));
+    try!(file.flush());
+
+    Ok(())
 }
 
 fn report_results(res: Result<Vec<TestResult>, Error>) {

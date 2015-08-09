@@ -18,3 +18,11 @@ published to [crates.io].
 # How?
 
 TODO
+
+# Getting Started
+
+**IMPORTANT SECURITY WARNING: This program executes arbitrary untrusted code downloaded from the Internet. You are strongly recommended to take your own sandboxing precautions before running it.**
+
+# Future Work
+
+* Provide sandboxed testing environment
