@@ -278,6 +278,10 @@ impl TestResult {
             TestResultData::Error(_) => term::color::BRIGHT_MAGENTA
         }
     }
+
+    fn html_class(&self) -> &'static str {
+        self.quick_str()
+    }
 }
 
 struct TestResultReceiver {
@@ -570,10 +574,15 @@ fn report_quick_result(current_num: usize, total: usize, result: &TestResult) {
 fn report_results(res: Result<Vec<TestResult>, Error>) {
     match res {
         Ok(r) => {
-            report_success(r);
+            match export_report(r) {
+                Ok((summary, report_path)) => report_success(summary, report_path),
+                Err(e) => {
+                    report_error(e)
+                }
+            }
         }
         Err(e) => {
-            report_error(e);
+            report_error(e)
         }
     }
 }
@@ -589,9 +598,104 @@ fn report_error(e: Error) {
     std::process::exit(-1);
 }
 
-fn report_success(results: Vec<TestResult>) {
+fn export_report(mut results: Vec<TestResult>) -> Result<(Summary, PathBuf), Error> {
+    let path = PathBuf::from("./crusader-report.html");
     let s = summarize_results(&results);
 
+    results.sort_by(|a, b| {
+        a.rev_dep.name.cmp(&b.rev_dep.name)
+    });
+
+    let ref mut file = try!(File::create(&path));
+    try!(writeln!(file, "<!DOCTYPE html>"));
+
+    try!(writeln!(file, "<head>"));
+    try!(writeln!(file, "{}", r"
+
+<style>
+.passed { color: green; }
+.regressed { color: red; }
+.broken { color: yellow; }
+.error { color: magenta; }
+.stdout, .stderr, .test-exception-output { white-space: pre; }
+</style>
+
+"));
+    try!(writeln!(file, "</head>"));
+
+    try!(writeln!(file, "<body>"));
+
+    // Print the summary table
+    try!(writeln!(file, "<h1>Summary</h1>"));
+    try!(writeln!(file, "<table>"));
+    try!(writeln!(file, "<tr><th>Crate</th><th>Version</th><th>Result</th></tr>"));
+    for result in &results {
+        try!(writeln!(file, "<tr>"));
+        try!(writeln!(file, "<td>{}</td>", result.rev_dep.name));
+        try!(writeln!(file, "<td>{}</td>", result.rev_dep.vers));
+        try!(writeln!(file, "<td class='{}'>{}</td>", result.html_class(), result.quick_str()));
+        try!(writeln!(file, "</tr>"));
+    }
+    try!(writeln!(file, "</table>"));
+
+    try!(writeln!(file, "<h1>Details</h1>"));
+    for result in results {
+        try!(writeln!(file, "<div class='complete-result'>"));
+        try!(writeln!(file, "<h2>"));
+        try!(writeln!(file, "<span>{} {}</span>", result.rev_dep.name, result.rev_dep.vers));
+        try!(writeln!(file, "<span class='{}'>{}</span>", result.html_class(), result.quick_str()));
+        try!(writeln!(file, "</h2>"));
+        match result.data {
+            TestResultData::Passed(r1, r2) |
+            TestResultData::Regressed(r1, r2) => {
+                try!(export_compile_result(file, "before", r1));
+                try!(export_compile_result(file, "after", r2));
+            }
+            TestResultData::Broken(r) => {
+                try!(export_compile_result(file, "before", r));
+            }
+            TestResultData::Error(e) => {
+                try!(export_error(file, e));
+            }
+        }
+        try!(writeln!(file, "</div>"));
+    }
+    
+    try!(writeln!(file, "</body>"));
+
+    Ok((s, path))
+}
+
+fn export_compile_result(file: &mut File, label: &str, r: CompileResult) -> Result<(), Error> {
+    let stdout = sanitize(&r.stdout);
+    let stderr = sanitize(&r.stderr);
+    try!(writeln!(file, "<h3>{}</h3>", label));
+    try!(writeln!(file, "<div class='stdout'>\n{}\n</div>", stdout));
+    try!(writeln!(file, "<div class='stderr'>\n{}\n</div>", stderr));
+
+    Ok(())
+}
+
+fn export_error(file: &mut File, e: Error) -> Result<(), Error> {
+    let err = sanitize(&format!("{}", e));
+    try!(writeln!(file, "<h3>{}</h3>", "errors"));
+    try!(writeln!(file, "<div class='test-exception-output'>\n{}\n</div>", err));
+
+    Ok(())
+}
+
+fn sanitize(s: &str) -> String {
+    s.chars().flat_map(|c| {
+        match c {
+            '<' => "&lt;".chars().collect(),
+            '>' => "&gt;".chars().collect(),
+            '&' => "&amp;".chars().collect(),
+            _ => vec![c]
+        }
+    }).collect()
+}
+
+fn report_success(s: Summary, p: PathBuf) {
     println!("");
     print!("passed: ");
     print_color(&format!("{}", s.passed), term::color::BRIGHT_GREEN);
@@ -604,6 +708,10 @@ fn report_success(results: Vec<TestResult>) {
     println!("");
     print!("error: ");
     print_color(&format!("{}", s.error), term::color::BRIGHT_MAGENTA);
+    println!("");
+
+    println!("");
+    println!("full report: {}", p.to_str().unwrap());
     println!("");
 }
 
