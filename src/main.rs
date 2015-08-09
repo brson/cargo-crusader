@@ -19,7 +19,7 @@ use std::fmt;
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{PathBuf, Path};
-use std::process::Command;
+use std::process::{self, Command};
 use std::str::{self, Utf8Error};
 use std::string::FromUtf8Error;
 use std::sync::mpsc::{self, Sender, Receiver, RecvError};
@@ -72,7 +72,7 @@ fn get_config() -> Result<Config, Error> {
     let manifest = env::var("CRUSADER_MANIFEST");
     let manifest = manifest.unwrap_or_else(|_| "./Cargo.toml".to_string());
     let manifest = PathBuf::from(manifest);
-    info!("Using manifest {:?}", manifest);
+    debug!("Using manifest {:?}", manifest);
 
     let source_name = try!(get_crate_name(&manifest));
     Ok(Config {
@@ -128,7 +128,7 @@ fn crate_url(krate: &str, call: Option<&str>) -> String {
 }
 
 fn get_rev_deps(crate_name: &str) -> Result<Vec<RevDepName>, Error> {
-    info!("Getting reverse deps for {}", crate_name);
+    debug!("Getting reverse deps for {}", crate_name);
     let ref url = crate_url(crate_name, Some("reverse_dependencies"));
     let ref body = try!(http_get_to_string(url));
     let rev_deps = try!(parse_rev_deps(body));
@@ -144,7 +144,7 @@ fn http_get_bytes(url: &str) -> Result<Vec<u8>, Error> {
     let resp = try!(http::handle().get(url).exec());
 
     if resp.get_code() == 302 {
-        info!("following 302 HTTP response");
+        debug!("following 302 HTTP response");
         // Resource moved
         if let Some(l) = resp.get_headers().get("location") {
             if l.len() > 0 {
@@ -184,7 +184,7 @@ fn parse_rev_deps(s: &str) -> Result<Vec<RevDepName>, Error> {
     let revdeps = decoded.dependencies.into_iter()
         .map(depconv).collect();
 
-    info!("revdeps: {:?}", revdeps);
+    debug!("revdeps: {:?}", revdeps);
 
     Ok(revdeps)
 }
@@ -328,7 +328,7 @@ fn run_test_local(base_crate: &CrateOverride, next_crate: &CrateOverride, rev_de
         }
     };
 
-    info!("testing rev dep: {:?}", rev_dep);
+    debug!("testing rev dep: {:?}", rev_dep);
 
     let base_result = match compile_with_custom_dep(&rev_dep, base_crate) {
         Ok(r) => r,
@@ -351,7 +351,7 @@ fn run_test_local(base_crate: &CrateOverride, next_crate: &CrateOverride, rev_de
 }
 
 fn resolve_rev_dep_version(name: RevDepName) -> Result<RevDep, Error> {
-    info!("resolving current version for {}", name);
+    debug!("resolving current version for {}", name);
     let ref url = crate_url(&name, None);
     let ref body = try!(http_get_to_string(url));
     // Download the crate info from crates.io
@@ -394,25 +394,37 @@ struct CompileResult {
 }
 
 impl CompileResult {
-    fn failed(&self) -> bool { unimplemented!() }
+    fn failed(&self) -> bool {
+        !self.success
+    }
 }
 
 fn compile_with_custom_dep(rev_dep: &RevDep, krate: &CrateOverride) -> Result<CompileResult, Error> {
-    let temp_dir = try!(TempDir::new("crusader"));
     let ref crate_handle = try!(get_crate_handle(rev_dep));
+    let temp_dir = try!(TempDir::new("crusader"));
     let source_dir = temp_dir.path().join("source");
     try!(fs::create_dir(&*source_dir));
     try!(crate_handle.unpack_source_to(&*source_dir));
 
-    let source_dir = source_dir.to_string_lossy().into_owned();
+    match *krate {
+        CrateOverride::Default => (),
+        CrateOverride::Source(ref path) => {
+            unimplemented!()
+        }
+    }
+
+    let manifest = source_dir.join("Cargo.toml");
+    let manifest = manifest.to_str().unwrap().to_owned();
     let mut cmd = Command::new("cargo");
     let cmd = cmd.arg("build")
         .arg("--manifest-path")
-        .arg(source_dir);
-    info!("running cargo: {:?}", cmd);
+        .arg(manifest);
+    debug!("running cargo: {:?}", cmd);
     let r = try!(cmd.output());
 
     let success = r.status.success();
+
+    debug!("result: {:?}", success);
 
     Ok(CompileResult {
         stdout: try!(String::from_utf8(r.stdout)),
@@ -444,7 +456,23 @@ fn get_crate_handle(rev_dep: &RevDep) -> Result<CrateHandle, Error> {
 
 impl CrateHandle {
     fn unpack_source_to(&self, path: &Path) -> Result<(), Error> {
-        unimplemented!()
+        debug!("unpackng {:?} to {:?}", self.0, path);
+        let mut cmd = Command::new("tar");
+        let cmd = cmd
+            .arg("xzf")
+            .arg(self.0.to_str().unwrap().to_owned())
+            .arg("--strip-components=1")
+            .arg("-C")
+            .arg(path.to_str().unwrap().to_owned());
+        let r = try!(cmd.output());
+        if r.status.success() {
+            Ok(())
+        } else {
+            // FIXME: Want to put r in this value but
+            // process::Output doesn't implement Debug
+            let s = String::from_utf8_lossy(&r.stderr).into_owned();
+            Err(Error::ProcessError(s))
+        }
     }
 }
 
@@ -467,6 +495,7 @@ enum Error {
     RecvError(RecvError),
     NoCrateVersions,
     FromUtf8Error(FromUtf8Error),
+    ProcessError(String)
 }
 
 impl From<semver::ParseError> for Error {
