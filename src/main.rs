@@ -28,6 +28,7 @@ use rustc_serialize::json;
 use semver::Version;
 use std::convert::From;
 use std::env;
+use std::error::Error as StdError;
 use std::fmt;
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
@@ -225,17 +226,17 @@ struct TestResult {
 
 #[derive(Debug)]
 enum TestResultData {
-    Broken(CompileResult),
+    Passed(CompileResult, CompileResult),
     Regressed(CompileResult, CompileResult),
-    Pass(CompileResult, CompileResult),
+    Broken(CompileResult),
     Error(Error),
 }
 
 impl TestResult {
-    fn broken(rev_dep: RevDep, r: CompileResult) -> TestResult {
+    fn passed(rev_dep: RevDep, r1: CompileResult, r2: CompileResult) -> TestResult {
         TestResult {
             rev_dep: rev_dep,
-            data: TestResultData::Broken(r)
+            data: TestResultData::Passed(r1, r2)
         }
     }
 
@@ -246,10 +247,10 @@ impl TestResult {
         }
     }
 
-    fn pass(rev_dep: RevDep, r1: CompileResult, r2: CompileResult) -> TestResult {
+    fn broken(rev_dep: RevDep, r: CompileResult) -> TestResult {
         TestResult {
             rev_dep: rev_dep,
-            data: TestResultData::Pass(r1, r2)
+            data: TestResultData::Broken(r)
         }
     }
 
@@ -262,18 +263,18 @@ impl TestResult {
     
     fn quick_str(&self) -> &'static str {
         match self.data {
-            TestResultData::Broken(_) => "broken",
+            TestResultData::Passed(..) => "passed",
             TestResultData::Regressed(..) => "regressed",
-            TestResultData::Pass(..) => "pass",
+            TestResultData::Broken(_) => "broken",
             TestResultData::Error(_) => "error"
         }
     }
 
     fn term_color(&self) -> term::color::Color {
         match self.data {
-            TestResultData::Broken(_) => term::color::BRIGHT_YELLOW,
+            TestResultData::Passed(..) => term::color::BRIGHT_GREEN,
             TestResultData::Regressed(..) => term::color::BRIGHT_RED,
-            TestResultData::Pass(..) => term::color::BRIGHT_GREEN,
+            TestResultData::Broken(_) => term::color::BRIGHT_YELLOW,
             TestResultData::Error(_) => term::color::BRIGHT_MAGENTA
         }
     }
@@ -357,7 +358,7 @@ fn run_test_local(config: &Config, rev_dep: RevDepName) -> TestResult {
     if next_result.failed() {
         TestResult::regressed(rev_dep, base_result, next_result)
     } else {
-        TestResult::pass(rev_dep, base_result, next_result)
+        TestResult::passed(rev_dep, base_result, next_result)
     }
 }
 
@@ -526,14 +527,16 @@ fn print_status_header() {
     print!("crusader: ");
 }
 
-fn print_color(s: &str, color: term::color::Color) {
-    if !really_print_color(s, color) {
+fn print_color(s: &str, fg: term::color::Color) {
+    if !really_print_color(s, fg) {
         print!("{}", s);
     }
 
-    fn really_print_color(s: &str, color: term::color::Color) -> bool {
+    fn really_print_color(s: &str,
+                          fg: term::color::Color) -> bool {
         if let Some(ref mut t) = term::stdout() {
-            if t.fg(color).is_err() { return false }
+            if t.fg(fg).is_err() { return false }
+            let _ = t.attr(term::Attr::Bold);
             if write!(t, "{}", s).is_err() { return false }
             assert!(t.reset().unwrap());
         }
@@ -565,7 +568,66 @@ fn report_quick_result(current_num: usize, total: usize, result: &TestResult) {
 }
 
 fn report_results(res: Result<Vec<TestResult>, Error>) {
-    println!("results: {:?}", res);
+    match res {
+        Ok(r) => {
+            report_success(r);
+        }
+        Err(e) => {
+            report_error(e);
+        }
+    }
+}
+
+fn report_error(e: Error) {
+    println!("");
+    print_color("error", term::color::BRIGHT_RED);
+    println!(": {}", e.description());
+    println!("");
+    println!("{}", e);
+    println!("");
+
+    std::process::exit(-1);
+}
+
+fn report_success(results: Vec<TestResult>) {
+    let s = summarize_results(&results);
+
+    println!("");
+    print!("passed: ");
+    print_color(&format!("{}", s.passed), term::color::BRIGHT_GREEN);
+    println!("");
+    print!("regressed: ");
+    print_color(&format!("{}", s.regressed), term::color::BRIGHT_RED);
+    println!("");
+    print!("broken: ");
+    print_color(&format!("{}", s.broken), term::color::BRIGHT_YELLOW);
+    println!("");
+    print!("error: ");
+    print_color(&format!("{}", s.error), term::color::BRIGHT_MAGENTA);
+    println!("");
+}
+
+#[derive(Default)]
+struct Summary {
+    broken: usize,
+    regressed: usize,
+    passed: usize,
+    error: usize
+}
+
+fn summarize_results(results: &[TestResult]) -> Summary {
+    let mut sum = Summary::default();
+
+    for result in results {
+        match result.data {
+            TestResultData::Broken(..) => sum.broken += 1,
+            TestResultData::Regressed(..) => sum.regressed += 1,
+            TestResultData::Passed(..) => sum.passed += 1,
+            TestResultData::Error(..) => sum.error += 1,
+        }
+    }
+
+    return sum;
 }
 
 #[derive(Debug)]
@@ -635,5 +697,43 @@ impl fmt::Debug for CurlHttpResponseWrapper {
         try!(fmt.write_str(&format!("{:?}", tup)));
 
         Ok(())
+    }
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+        match *self {
+            Error::ManifestName(_) => fmt.write_str(self.description()),
+            Error::SemverError(ref e) => e.fmt(fmt),
+            Error::TomlError(_) => fmt.write_str(self.description()),
+            Error::IoError(ref e) => e.fmt(fmt),
+            Error::CurlError(c) => c.fmt(fmt),
+            Error::HttpError(CurlHttpResponseWrapper(ref r)) => r.fmt(fmt),
+            Error::Utf8Error(ref e) => e.fmt(fmt),
+            Error::JsonDecode(ref e) => e.fmt(fmt),
+            Error::RecvError(ref e) => e.fmt(fmt),
+            Error::NoCrateVersions => fmt.write_str(self.description()),
+            Error::FromUtf8Error(ref e) => e.fmt(fmt),
+            Error::ProcessError(ref s) => s.fmt(fmt)
+        }
+    }
+}
+
+impl StdError for Error {
+    fn description(&self) -> &str {
+        match *self {
+            Error::ManifestName(_) => "error extracting crate name from manifest",
+            Error::SemverError(ref e) => e.description(),
+            Error::TomlError(_) => "error parsing TOML",
+            Error::IoError(ref e) => e.description(),
+            Error::CurlError(_) => "curl error",
+            Error::HttpError(_) => "HTTP error",
+            Error::Utf8Error(ref e) => e.description(),
+            Error::JsonDecode(ref e) => e.description(),
+            Error::RecvError(ref e) => e.description(),
+            Error::NoCrateVersions => "crate has no published versions",
+            Error::FromUtf8Error(ref e) => e.description(),
+            Error::ProcessError(_) => "unexpected subprocess failure"
+        }
     }
 }
