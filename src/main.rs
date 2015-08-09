@@ -7,6 +7,7 @@ extern crate semver;
 extern crate toml;
 extern crate threadpool;
 extern crate num_cpus;
+extern crate tempdir;
 
 use curl::{http, ErrCode};
 use curl::http::Response as CurlHttpResponse;
@@ -15,12 +16,14 @@ use semver::Version;
 use std::convert::From;
 use std::env;
 use std::fmt;
-use std::fs::File;
-use std::io::{self, Read};
+use std::fs::{self, File};
+use std::io::{self, Read, Write};
 use std::path::{PathBuf, Path};
 use std::str::{self, Utf8Error};
+use std::string::FromUtf8Error;
 use std::sync::mpsc::{self, Sender, Receiver, RecvError};
 use threadpool::ThreadPool;
+use tempdir::TempDir;
 
 fn main() {
     env_logger::init().unwrap();
@@ -133,15 +136,33 @@ fn get_rev_deps(crate_name: &str) -> Result<Vec<RevDepName>, Error> {
 }
 
 fn http_get_to_string(url: &str) -> Result<String, Error> {
+    Ok(try!(String::from_utf8(try!(http_get_bytes(url)))))
+}
+
+fn http_get_bytes(url: &str) -> Result<Vec<u8>, Error> {
     let resp = try!(http::handle().get(url).exec());
 
-    if resp.get_code() != 200 {
+    if resp.get_code() == 302 {
+        info!("following 302 HTTP response");
+        // Resource moved
+        if let Some(l) = resp.get_headers().get("location") {
+            if l.len() > 0 {
+                let url = l[0].clone();
+                let resp = try!(http::handle().get(url).exec());
+                if resp.get_code() != 200 {
+                    return Err(Error::HttpError(CurlHttpResponseWrapper(resp)));
+                } else {
+                    return Ok(resp.move_body());
+                }
+            }
+        }
+
+        return Err(Error::HttpError(CurlHttpResponseWrapper(resp)));
+    } else if resp.get_code() != 200 {
         return Err(Error::HttpError(CurlHttpResponseWrapper(resp)));
     }
 
-    let body = try!(str::from_utf8(resp.get_body()));
-
-    Ok(String::from(body))
+    Ok(resp.move_body())
 }
 
 fn parse_rev_deps(s: &str) -> Result<Vec<RevDepName>, Error> {
@@ -308,12 +329,18 @@ fn run_test_local(base_crate: &CrateOverride, next_crate: &CrateOverride, rev_de
 
     info!("testing rev dep: {:?}", rev_dep);
 
-    let base_result = compile_with_custom_dep(&rev_dep, base_crate);
+    let base_result = match compile_with_custom_dep(&rev_dep, base_crate) {
+        Ok(r) => r,
+        Err(e) => return TestResult::error(rev_dep, e)
+    };
 
     if base_result.failed() {
         return TestResult::broken(rev_dep, base_result);
     }
-    let next_result = compile_with_custom_dep(&rev_dep, next_crate);
+    let next_result = match compile_with_custom_dep(&rev_dep, next_crate) {
+        Ok(r) => r,
+        Err(e) => return TestResult::error(rev_dep, e)
+    };
 
     if next_result.failed() {
         TestResult::fail(rev_dep, base_result, next_result)
@@ -369,12 +396,33 @@ impl CompileResult {
     fn failed(&self) -> bool { unimplemented!() }
 }
 
-fn compile_with_custom_dep(rev_dep: &RevDep, krate: &CrateOverride) -> CompileResult {
-    //let temp_dir = get_temp_dir();
-    //let crate_handle = get_crate_handle(rev_dep);
-
-    
+fn compile_with_custom_dep(rev_dep: &RevDep, krate: &CrateOverride) -> Result<CompileResult, Error> {
+    let temp_dir = try!(TempDir::new("crusader"));
+    let crate_handle = try!(get_crate_handle(rev_dep));
+    let source_dir = temp_dir.path().join("source");
+    try!(fs::create_dir(source_dir));
     unimplemented!()
+}
+
+struct CrateHandle(PathBuf);
+
+fn get_crate_handle(rev_dep: &RevDep) -> Result<CrateHandle, Error> {
+    let cache_path = Path::new("./.crusader/crate-cache");
+    let crate_dir = cache_path.join(&rev_dep.name);
+    try!(fs::create_dir_all(&crate_dir));
+    let crate_file = crate_dir.join(format!("{}-{}.crate", rev_dep.name, rev_dep.vers));
+    // FIXME: Path::exists() is unstable so just opening the file
+    let crate_file_exists = File::open(&crate_file).is_ok();
+    if !crate_file_exists {
+        let url = crate_url(&rev_dep.name,
+                            Some(&format!("{}/download", rev_dep.vers)));
+        let body = try!(http_get_bytes(&url));
+        // FIXME: Should move this into place atomically
+        let mut file = try!(File::create(&crate_file));
+        try!(file.write_all(&body));
+    }
+
+    return Ok(CrateHandle(crate_file));
 }
 
 fn report_results(res: Result<Vec<TestResult>, Error>) {
@@ -394,7 +442,8 @@ enum Error {
     Utf8Error(Utf8Error),
     JsonDecode(json::DecoderError),
     RecvError(RecvError),
-    NoCrateVersions
+    NoCrateVersions,
+    FromUtf8Error(FromUtf8Error),
 }
 
 impl From<semver::ParseError> for Error {
@@ -430,6 +479,12 @@ impl From<json::DecoderError> for Error {
 impl From<RecvError> for Error {
     fn from(e: RecvError) -> Error {
         Error::RecvError(e)
+    }
+}
+
+impl From<FromUtf8Error> for Error {
+    fn from(e: FromUtf8Error) -> Error {
+        Error::FromUtf8Error(e)
     }
 }
 
