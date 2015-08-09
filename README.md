@@ -26,3 +26,7 @@ TODO
 # Future Work
 
 * Provide sandboxed testing environment
+
+# License
+
+MIT/Apache-2.0 is the official license of both The Rust Project and The Cargo Crusade.

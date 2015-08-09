@@ -1,3 +1,13 @@
+// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
+// file at the top-level directory of this distribution and at
+// http://rust-lang.org/COPYRIGHT.
+//
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.
+
 extern crate curl;
 extern crate env_logger;
 #[macro_use]
@@ -19,8 +29,8 @@ use std::fmt;
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{PathBuf, Path};
-use std::process::{self, Command};
-use std::str::{self, Utf8Error};
+use std::process::Command;
+use std::str::Utf8Error;
 use std::string::FromUtf8Error;
 use std::sync::mpsc::{self, Sender, Receiver, RecvError};
 use threadpool::ThreadPool;
@@ -34,35 +44,38 @@ fn main() {
 fn run() -> Result<Vec<TestResult>, Error> {
     let config = try!(get_config());
 
+    // Find all the crates on crates.io the depend on ours
     let rev_deps = try!(get_rev_deps(&config.crate_name));
-    let crates = try!(acquire_crates(&config));
-    let mut results = Vec::new();
+
+    let mut result_futures = Vec::new();
     let ref mut pool = ThreadPool::new(num_cpus::get());
     for rev_dep in rev_deps {
-        let result = run_test(pool, crates.base.clone(), crates.next.clone(), rev_dep);
-        results.push(result);
+        let result = run_test(pool, config.clone(), rev_dep);
+        result_futures.push(result);
     }
 
-    let results = results.into_iter().map(|r| r.take());
+    let total = result_futures.len();
+    let results = result_futures.into_iter().enumerate().map(|(i, r)| {
+        let r = r.take();
+        report_quick_result(i, total, &r);
+        r
+    });
     let results = results.collect::<Vec<_>>();
-    let failed = results.iter().any(|r| r.failed());
 
-    if failed {
-        Err(Error::TestFailure(results))
-    } else {
-        Ok(results)
-    }
+    Ok(results)
 }
 
+#[derive(Clone)]
 struct Config {
     manifest_path: PathBuf,
     crate_name: String,
-    base_origin: Origin,
-    next_origin: Origin
+    base_override: CrateOverride,
+    next_override: CrateOverride
 }
 
-enum Origin {
-    Published,
+#[derive(Clone)]
+enum CrateOverride {
+    Default,
     Source(PathBuf)
 }
 
@@ -78,8 +91,8 @@ fn get_config() -> Result<Config, Error> {
     Ok(Config {
         manifest_path: manifest.clone(),
         crate_name: source_name,
-        base_origin: Origin::Published,
-        next_origin: Origin::Source(manifest)
+        base_override: CrateOverride::Default,
+        next_override: CrateOverride::Source(manifest)
     })
 }
 
@@ -128,10 +141,12 @@ fn crate_url(krate: &str, call: Option<&str>) -> String {
 }
 
 fn get_rev_deps(crate_name: &str) -> Result<Vec<RevDepName>, Error> {
-    debug!("Getting reverse deps for {}", crate_name);
+    status(&format!("downloading reverse deps for {}", crate_name));
     let ref url = crate_url(crate_name, Some("reverse_dependencies"));
     let ref body = try!(http_get_to_string(url));
     let rev_deps = try!(parse_rev_deps(body));
+
+    status(&format!("{} reverse deps", rev_deps.len()));
 
     Ok(rev_deps)
 }
@@ -189,30 +204,6 @@ fn parse_rev_deps(s: &str) -> Result<Vec<RevDepName>, Error> {
     Ok(revdeps)
 }
 
-struct Crates {
-    base: CrateOverride,
-    next: CrateOverride
-}
-
-#[derive(Clone)]
-enum CrateOverride {
-    Default,
-    Source(PathBuf)
-}
-
-fn acquire_crates(config: &Config) -> Result<Crates, Error> {
-    let base = acquire_crate(&config.base_origin);
-    let next = acquire_crate(&config.next_origin);
-    Ok(Crates { base: base, next: next })
-}
-
-fn acquire_crate(origin: &Origin) -> CrateOverride {
-    match *origin {
-        Origin::Published => CrateOverride::Default,
-        Origin::Source(ref p) => CrateOverride::Source(p.clone())
-    }
-}
-
 #[derive(Debug, Clone)]
 struct RevDep {
     name: RevDepName,
@@ -228,7 +219,7 @@ struct TestResult {
 #[derive(Debug)]
 enum TestResultData {
     Broken(CompileResult),
-    Fail(CompileResult, CompileResult),
+    Regressed(CompileResult, CompileResult),
     Pass(CompileResult, CompileResult),
     Error(Error),
 }
@@ -241,10 +232,10 @@ impl TestResult {
         }
     }
 
-    fn fail(rev_dep: RevDep, r1: CompileResult, r2: CompileResult) -> TestResult {
+    fn regressed(rev_dep: RevDep, r1: CompileResult, r2: CompileResult) -> TestResult {
         TestResult {
             rev_dep: rev_dep,
-            data: TestResultData::Fail(r1, r2)
+            data: TestResultData::Regressed(r1, r2)
         }
     }
 
@@ -262,10 +253,12 @@ impl TestResult {
         }
     }
     
-    fn failed(&self) -> bool {
+    fn quick_str(&self) -> &'static str {
         match self.data {
-            TestResultData::Fail(..) => true,
-            _ => false
+            TestResultData::Broken(_) => "broken",
+            TestResultData::Regressed(..) => "regressed",
+            TestResultData::Pass(..) => "pass",
+            TestResultData::Error(_) => "error"
         }
     }
 }
@@ -302,19 +295,20 @@ fn new_result_future(rev_dep: RevDepName) -> (Sender<TestResult>, TestResultFutu
 }
 
 fn run_test(pool: &mut ThreadPool,
-            base_crate: CrateOverride,
-            next_crate: CrateOverride,
+            config: Config,
             rev_dep: RevDepName) -> TestResultFuture {
     let (result_tx, result_future) = new_result_future(rev_dep.clone());
     pool.execute(move || {
-        let res = run_test_local(&base_crate, &next_crate, rev_dep);
-        result_tx.send(res);
+        let res = run_test_local(&config, rev_dep);
+        result_tx.send(res).unwrap();
     });
 
     return result_future;
 }
 
-fn run_test_local(base_crate: &CrateOverride, next_crate: &CrateOverride, rev_dep: RevDepName) -> TestResult {
+fn run_test_local(config: &Config, rev_dep: RevDepName) -> TestResult {
+
+    status(&format!("testing crate {}", rev_dep));
 
     // First, figure get the most recent version number
     let rev_dep = match resolve_rev_dep_version(rev_dep.clone()) {
@@ -328,12 +322,10 @@ fn run_test_local(base_crate: &CrateOverride, next_crate: &CrateOverride, rev_de
         }
     };
 
-    debug!("testing rev dep: {:?}", rev_dep);
-
     // TODO: Decide whether the version of our crate requested by the
     // rev dep is semver-compatible with the in-development version.
     
-    let base_result = match compile_with_custom_dep(&rev_dep, base_crate) {
+    let base_result = match compile_with_custom_dep(&rev_dep, &config.base_override) {
         Ok(r) => r,
         Err(e) => return TestResult::error(rev_dep, e)
     };
@@ -341,13 +333,13 @@ fn run_test_local(base_crate: &CrateOverride, next_crate: &CrateOverride, rev_de
     if base_result.failed() {
         return TestResult::broken(rev_dep, base_result);
     }
-    let next_result = match compile_with_custom_dep(&rev_dep, next_crate) {
+    let next_result = match compile_with_custom_dep(&rev_dep, &config.next_override) {
         Ok(r) => r,
         Err(e) => return TestResult::error(rev_dep, e)
     };
 
     if next_result.failed() {
-        TestResult::fail(rev_dep, base_result, next_result)
+        TestResult::regressed(rev_dep, base_result, next_result)
     } else {
         TestResult::pass(rev_dep, base_result, next_result)
     }
@@ -506,15 +498,27 @@ fn emit_cargo_override_path(source_dir: &Path, override_path: &Path) -> Result<(
     Ok(())
 }
 
+fn status(s: &str) {
+    println!("crusader: {}", s);
+}
+
 fn report_results(res: Result<Vec<TestResult>, Error>) {
     println!("results: {:?}", res);
 }
 
+fn report_quick_result(current_num: usize, total: usize, result: &TestResult) {
+    status(&format!("result {} of {}, {} {}: {}",
+                    current_num,
+                    total,
+                    result.rev_dep.name,
+                    result.rev_dep.vers,
+                    result.quick_str()
+                    ));
+}
+
 #[derive(Debug)]
 enum Error {
-    BadArgs,
     ManifestName(PathBuf),
-    TestFailure(Vec<TestResult>),
     SemverError(semver::ParseError),
     TomlError(Vec<toml::ParserError>),
     IoError(io::Error),
