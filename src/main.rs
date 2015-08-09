@@ -11,9 +11,12 @@
 extern crate curl;
 extern crate env_logger;
 #[macro_use]
+extern crate lazy_static;
+#[macro_use]
 extern crate log;
 extern crate rustc_serialize;
 extern crate semver;
+extern crate term;
 extern crate toml;
 extern crate threadpool;
 extern crate num_cpus;
@@ -32,6 +35,7 @@ use std::path::{PathBuf, Path};
 use std::process::Command;
 use std::str::Utf8Error;
 use std::string::FromUtf8Error;
+use std::sync::Mutex;
 use std::sync::mpsc::{self, Sender, Receiver, RecvError};
 use threadpool::ThreadPool;
 use tempdir::TempDir;
@@ -47,17 +51,20 @@ fn run() -> Result<Vec<TestResult>, Error> {
     // Find all the crates on crates.io the depend on ours
     let rev_deps = try!(get_rev_deps(&config.crate_name));
 
-    let mut result_futures = Vec::new();
+    // Run all the tests in a thread pool and create a list of result
+    // receivers.
+    let mut result_rxs = Vec::new();
     let ref mut pool = ThreadPool::new(num_cpus::get());
     for rev_dep in rev_deps {
         let result = run_test(pool, config.clone(), rev_dep);
-        result_futures.push(result);
+        result_rxs.push(result);
     }
 
-    let total = result_futures.len();
-    let results = result_futures.into_iter().enumerate().map(|(i, r)| {
-        let r = r.take();
-        report_quick_result(i, total, &r);
+    // Now wait for all the results and return them.
+    let total = result_rxs.len();
+    let results = result_rxs.into_iter().enumerate().map(|(i, r)| {
+        let r = r.recv();
+        report_quick_result(i + 1, total, &r);
         r
     });
     let results = results.collect::<Vec<_>>();
@@ -261,15 +268,24 @@ impl TestResult {
             TestResultData::Error(_) => "error"
         }
     }
+
+    fn term_color(&self) -> term::color::Color {
+        match self.data {
+            TestResultData::Broken(_) => term::color::BRIGHT_YELLOW,
+            TestResultData::Regressed(..) => term::color::BRIGHT_RED,
+            TestResultData::Pass(..) => term::color::BRIGHT_GREEN,
+            TestResultData::Error(_) => term::color::BRIGHT_MAGENTA
+        }
+    }
 }
 
-struct TestResultFuture {
+struct TestResultReceiver {
     rev_dep: RevDepName,
     rx: Receiver<TestResult>
 }
 
-impl TestResultFuture {
-    fn take(self) -> TestResult {
+impl TestResultReceiver {
+    fn recv(self) -> TestResult {
         match self.rx.recv() {
             Ok(r) => r,
             Err(e) => {
@@ -283,10 +299,10 @@ impl TestResultFuture {
     }
 }
 
-fn new_result_future(rev_dep: RevDepName) -> (Sender<TestResult>, TestResultFuture) {
+fn new_result_receiver(rev_dep: RevDepName) -> (Sender<TestResult>, TestResultReceiver) {
     let (tx, rx) = mpsc::channel();
 
-    let fut = TestResultFuture {
+    let fut = TestResultReceiver {
         rev_dep: rev_dep,
         rx: rx
     };
@@ -296,14 +312,14 @@ fn new_result_future(rev_dep: RevDepName) -> (Sender<TestResult>, TestResultFutu
 
 fn run_test(pool: &mut ThreadPool,
             config: Config,
-            rev_dep: RevDepName) -> TestResultFuture {
-    let (result_tx, result_future) = new_result_future(rev_dep.clone());
+            rev_dep: RevDepName) -> TestResultReceiver {
+    let (result_tx, result_rx) = new_result_receiver(rev_dep.clone());
     pool.execute(move || {
         let res = run_test_local(&config, rev_dep);
         result_tx.send(res).unwrap();
     });
 
-    return result_future;
+    return result_rx;
 }
 
 fn run_test_local(config: &Config, rev_dep: RevDepName) -> TestResult {
@@ -498,22 +514,58 @@ fn emit_cargo_override_path(source_dir: &Path, override_path: &Path) -> Result<(
     Ok(())
 }
 
+fn status_lock<F>(f: F) where F: FnOnce() -> () {
+   lazy_static! {
+        static ref LOCK: Mutex<()> = Mutex::new(());
+    }
+    let _guard = LOCK.lock();
+    f();
+}
+
+fn print_status_header() {
+    print!("crusader: ");
+}
+
+fn print_color(s: &str, color: term::color::Color) {
+    if !really_print_color(s, color) {
+        print!("{}", s);
+    }
+
+    fn really_print_color(s: &str, color: term::color::Color) -> bool {
+        if let Some(ref mut t) = term::stdout() {
+            if t.fg(color).is_err() { return false }
+            if write!(t, "{}", s).is_err() { return false }
+            assert!(t.reset().unwrap());
+        }
+
+        true
+    }
+}
+
 fn status(s: &str) {
-    println!("crusader: {}", s);
+    status_lock(|| {
+        print_status_header();
+        println!("{}", s);
+    });
+}
+
+fn report_quick_result(current_num: usize, total: usize, result: &TestResult) {
+    status_lock(|| {
+        print_status_header();
+        print!("result {} of {}, {} {}: ",
+               current_num,
+               total,
+               result.rev_dep.name,
+               result.rev_dep.vers
+               );
+        print_color(&format!("{}", result.quick_str()),
+                    result.term_color());
+        println!("");
+    });
 }
 
 fn report_results(res: Result<Vec<TestResult>, Error>) {
     println!("results: {:?}", res);
-}
-
-fn report_quick_result(current_num: usize, total: usize, result: &TestResult) {
-    status(&format!("result {} of {}, {} {}: {}",
-                    current_num,
-                    total,
-                    result.rev_dep.name,
-                    result.rev_dep.vers,
-                    result.quick_str()
-                    ));
 }
 
 #[derive(Debug)]
