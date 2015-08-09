@@ -321,11 +321,19 @@ fn resolve_rev_dep_version(name: RevDepName) -> Result<RevDep, Error> {
     info!("resolving current version for {}", name);
     let ref url = crate_url(&name, None);
     let ref body = try!(http_get_to_string(url));
+    // Download the crate info from crates.io
     let krate = try!(parse_crate(body));
-    println!("{:?}", krate);
+    // Pull out the version numbers and sort them
+    let versions = krate.versions.iter()
+        .filter_map(|r| Version::parse(&*r.num).ok());
+    let mut versions = versions.collect::<Vec<_>>();
+    versions.sort();
+    println!("{:?}", versions);
     unimplemented!()
 }
 
+// The server returns much more info than this.
+// This just defines pieces we need.
 #[derive(RustcEncodable, RustcDecodable, Debug)]
 struct RegistryCrate {
     versions: Vec<RegistryVersion>
