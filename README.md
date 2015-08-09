@@ -17,15 +17,33 @@ published to [crates.io].
 
 # How?
 
-TODO
+When you run `cargo-crusader' from the source directory of your
+published crate, Crusader asks crates.io for all of its reverse
+dependencies - *published crates that DEPEND ON YOU*. It then
+downloads each of them, and builds them: first against your crate as
+currently published, then against your local work-in-progress
+(i.e. the next version you are going to publish). It then reports
+differences in behavior.
 
 # Getting Started
 
-**IMPORTANT SECURITY WARNING: This program executes arbitrary untrusted code downloaded from the Internet. You are strongly recommended to take your own sandboxing precautions before running it.**
+**IMPORTANT SECURITY WARNING: This program executes arbitrary
+  untrusted code downloaded from the Internet. You are strongly
+  recommended to take your own sandboxing precautions before running
+  it.**
 
-# Future Work
+# Future improvements
 
-* Provide sandboxed testing environment
+Presently Crusader will override reverse dependencies with your local
+revision *even if the version they requested is not semver compatible
+with your work-in-progress*. Crusader might first verify whether or
+not the WIP qualifies as a semver-valid upgrade.
+
+Testing upstream as well - Crusader could ask for all the WIP branches
+of your dependencies and then override your build to see if upcoming
+changes are going to break your crate.
+
+Sandboxing.
 
 # License
 

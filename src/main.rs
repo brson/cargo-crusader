@@ -55,7 +55,7 @@ fn run() -> Result<Vec<TestResult>, Error> {
     // Run all the tests in a thread pool and create a list of result
     // receivers.
     let mut result_rxs = Vec::new();
-    let ref mut pool = ThreadPool::new(num_cpus::get());
+    let ref mut pool = ThreadPool::new(1);
     for rev_dep in rev_deps {
         let result = run_test(pool, config.clone(), rev_dep);
         result_rxs.push(result);
@@ -282,6 +282,22 @@ impl TestResult {
     fn html_class(&self) -> &'static str {
         self.quick_str()
     }
+
+    fn html_anchor(&self) -> String {
+        sanitize_link(&format!("{}-{}", self.rev_dep.name, self.rev_dep.vers))
+    }
+}
+
+fn sanitize_link(s: &str) -> String {
+    s.chars().map(|c| {
+        let c = c.to_lowercase().collect::<Vec<_>>()[0];
+        if c != '-' && (c < 'a' || c > 'z')
+            && (c < '0' || c > '9') {
+            '_'
+        } else {
+            c
+        }
+    }).collect()
 }
 
 struct TestResultReceiver {
@@ -631,7 +647,11 @@ fn export_report(mut results: Vec<TestResult>) -> Result<(Summary, PathBuf), Err
     try!(writeln!(file, "<tr><th>Crate</th><th>Version</th><th>Result</th></tr>"));
     for result in &results {
         try!(writeln!(file, "<tr>"));
-        try!(writeln!(file, "<td>{}</td>", result.rev_dep.name));
+        try!(writeln!(file, "<td>"));
+        try!(writeln!(file, "<a href='#{}'>", result.html_anchor()));
+        try!(writeln!(file, "{}", result.rev_dep.name));
+        try!(writeln!(file, "</a>"));
+        try!(writeln!(file, "</td>"));
         try!(writeln!(file, "<td>{}</td>", result.rev_dep.vers));
         try!(writeln!(file, "<td class='{}'>{}</td>", result.html_class(), result.quick_str()));
         try!(writeln!(file, "</tr>"));
@@ -641,6 +661,7 @@ fn export_report(mut results: Vec<TestResult>) -> Result<(Summary, PathBuf), Err
     try!(writeln!(file, "<h1>Details</h1>"));
     for result in results {
         try!(writeln!(file, "<div class='complete-result'>"));
+        try!(writeln!(file, "<a name='{}'></a>", result.html_anchor()));
         try!(writeln!(file, "<h2>"));
         try!(writeln!(file, "<span>{} {}</span>", result.rev_dep.name, result.rev_dep.vers));
         try!(writeln!(file, "<span class='{}'>{}</span>", result.html_class(), result.quick_str()));
