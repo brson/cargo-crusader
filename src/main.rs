@@ -19,6 +19,7 @@ use std::fmt;
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{PathBuf, Path};
+use std::process::Command;
 use std::str::{self, Utf8Error};
 use std::string::FromUtf8Error;
 use std::sync::mpsc::{self, Sender, Receiver, RecvError};
@@ -398,10 +399,26 @@ impl CompileResult {
 
 fn compile_with_custom_dep(rev_dep: &RevDep, krate: &CrateOverride) -> Result<CompileResult, Error> {
     let temp_dir = try!(TempDir::new("crusader"));
-    let crate_handle = try!(get_crate_handle(rev_dep));
+    let ref crate_handle = try!(get_crate_handle(rev_dep));
     let source_dir = temp_dir.path().join("source");
-    try!(fs::create_dir(source_dir));
-    unimplemented!()
+    try!(fs::create_dir(&*source_dir));
+    try!(crate_handle.unpack_source_to(&*source_dir));
+
+    let source_dir = source_dir.to_string_lossy().into_owned();
+    let mut cmd = Command::new("cargo");
+    let cmd = cmd.arg("build")
+        .arg("--manifest-path")
+        .arg(source_dir);
+    info!("running cargo: {:?}", cmd);
+    let r = try!(cmd.output());
+
+    let success = r.status.success();
+
+    Ok(CompileResult {
+        stdout: try!(String::from_utf8(r.stdout)),
+        stderr: try!(String::from_utf8(r.stderr)),
+        success: success
+    })
 }
 
 struct CrateHandle(PathBuf);
@@ -423,6 +440,12 @@ fn get_crate_handle(rev_dep: &RevDep) -> Result<CrateHandle, Error> {
     }
 
     return Ok(CrateHandle(crate_file));
+}
+
+impl CrateHandle {
+    fn unpack_source_to(&self, path: &Path) -> Result<(), Error> {
+        unimplemented!()
+    }
 }
 
 fn report_results(res: Result<Vec<TestResult>, Error>) {
