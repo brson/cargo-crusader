@@ -39,7 +39,7 @@ command in your `PATH` environment variable:
 $ git clone https://github.com/brson/cargo-crusader
 $ cd cargo-crusader
 $ cargo build --release
-$ export PATH=$PATH:(`pwd`)/target/release/
+$ export PATH=$PATH:`pwd`/target/release/
 ```
 
 Now change directories to your source and run `cargo-crusader`:
