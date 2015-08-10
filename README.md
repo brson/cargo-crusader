@@ -17,7 +17,7 @@ published to [crates.io].
 
 # How?
 
-When you run `cargo-crusader' from the source directory of your
+When you run `cargo-crusader` from the source directory of your
 published crate, Crusader asks crates.io for all of its reverse
 dependencies - *published crates that DEPEND ON YOU*. It then
 downloads each of them, and builds them: first against your crate as
@@ -31,6 +31,60 @@ differences in behavior.
   untrusted code downloaded from the Internet. You are strongly
   recommended to take your own sandboxing precautions before running
   it.**
+
+First, download and build Cargo Crusader, and put the `cargo-crusader`
+command in your `PATH` environment variable:
+
+```sh
+$ git clone https://github.com/brson/cargo-crusader
+$ cd cargo-crusader
+$ cargo build --release
+$ export PATH=$PATH:(`pwd`)/target/release/
+```
+
+Now change directories to your source and run `cargo-crusader`:
+
+```sh
+$ cargo-crusader
+crusader: downloading reverse deps for hyper
+crusader: 10 reverse deps
+crusader: testing crate aloft
+crusader: testing crate austenite
+crusader: result 1 of 10, aloft 0.3.1: broken
+crusader: testing crate bare
+crusader: result 2 of 10, austenite 0.0.1: broken
+crusader: testing crate catapult
+crusader: result 3 of 10, bare 0.0.1: broken
+crusader: testing crate chan
+crusader: result 4 of 10, catapult 0.1.2: broken
+crusader: testing crate chatbot
+crusader: result 5 of 10, chan 0.1.14: passed
+crusader: testing crate click_and_load
+crusader: result 6 of 10, chatbot 0.2.2: regressed
+crusader: testing crate coinbaser
+crusader: result 7 of 10, click_and_load 0.0.1: broken
+crusader: testing crate doapi
+crusader: result 8 of 10, coinbaser 0.1.0: regressed
+crusader: testing crate ease
+crusader: result 9 of 10, doapi 0.1.0: broken
+crusader: result 10 of 10, ease 0.2.1: regressed
+
+passed: 1
+regressed: 3
+broken: 6
+error: 0
+
+full report: ./crusader-report.html
+```
+
+A full run will take quite a while. After its done it will print a
+summary, as well as produce an HTML file containing the full results,
+including all the compiler output for each test.
+
+Tests result in four possible statuses: 'passed', if the reverse
+dependency built both before and after the upgrade; 'regressed', if it
+built before but not after; 'broken', if it didn't even build before
+upgrading; and 'error', for internal Crusader errors.
 
 # Future improvements
 
