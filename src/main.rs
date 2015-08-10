@@ -734,6 +734,8 @@ fn report_success(s: Summary, p: PathBuf) {
     println!("");
     println!("full report: {}", p.to_str().unwrap());
     println!("");
+    
+    if s.regressed > 0 { std::process::exit(-2) }
 }
 
 #[derive(Default)]
