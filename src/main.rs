@@ -270,15 +270,6 @@ impl TestResult {
         }
     }
 
-    fn report_result(&self) -> ReportResult {
-        match self.data {
-            TestResultData::Passed(..) => ReportResult::Passed,
-            TestResultData::Regressed(..) => ReportResult::Regressed,
-            TestResultData::Broken(_) => ReportResult::Broken,
-            TestResultData::Error(_) => ReportResult::Error,
-        }
-    }
-
     fn html_class(&self) -> &'static str {
         self.quick_str()
     }
@@ -581,8 +572,7 @@ fn report_quick_result(current_num: usize, total: usize, result: &TestResult) {
                result.rev_dep.name,
                result.rev_dep.vers
                );
-        print_color(&format!("{}", result.quick_str()),
-                    result.report_result().into());
+        print_color(&format!("{}", result.quick_str()), result.into());
         println!("");
     });
 }
@@ -726,6 +716,17 @@ impl Into<term::color::Color> for ReportResult {
             ReportResult::Broken => term::color::BRIGHT_YELLOW,
             ReportResult::Error => term::color::BRIGHT_MAGENTA,
         }
+    }
+}
+
+impl<'a> Into<term::color::Color> for &'a TestResult {
+    fn into(self) -> term::color::Color {
+        match self.data {
+            TestResultData::Passed(..) => ReportResult::Passed,
+            TestResultData::Regressed(..) => ReportResult::Regressed,
+            TestResultData::Broken(_) => ReportResult::Broken,
+            TestResultData::Error(_) => ReportResult::Error,
+        }.into()
     }
 }
 
