@@ -777,47 +777,23 @@ enum Error {
     ProcessError(String)
 }
 
-impl From<semver::ParseError> for Error {
-    fn from(e: semver::ParseError) -> Error {
-        Error::SemverError(e)
-    }
+macro_rules! convert_error {
+    ($from:ty, $to:ident) => (
+        impl From<$from> for Error {
+            fn from(e: $from) -> Error {
+                Error::$to(e)
+            }
+        }
+    )
 }
 
-impl From<io::Error> for Error {
-    fn from(e: io::Error) -> Error {
-        Error::IoError(e)
-    }
-}
-
-impl From<curl::ErrCode> for Error {
-    fn from(e: curl::ErrCode) -> Error {
-        Error::CurlError(e)
-    }
-}
-
-impl From<Utf8Error> for Error {
-    fn from(e: Utf8Error) -> Error {
-        Error::Utf8Error(e)
-    }
-}
-
-impl From<json::DecoderError> for Error {
-    fn from(e: json::DecoderError) -> Error {
-        Error::JsonDecode(e)
-    }
-}
-
-impl From<RecvError> for Error {
-    fn from(e: RecvError) -> Error {
-        Error::RecvError(e)
-    }
-}
-
-impl From<FromUtf8Error> for Error {
-    fn from(e: FromUtf8Error) -> Error {
-        Error::FromUtf8Error(e)
-    }
-}
+convert_error!(semver::ParseError, SemverError);
+convert_error!(io::Error, IoError);
+convert_error!(curl::ErrCode, CurlError);
+convert_error!(Utf8Error, Utf8Error);
+convert_error!(json::DecoderError, JsonDecode);
+convert_error!(RecvError, RecvError);
+convert_error!(FromUtf8Error, FromUtf8Error);
 
 struct CurlHttpResponseWrapper(CurlHttpResponse);
 
