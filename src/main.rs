@@ -270,15 +270,6 @@ impl TestResult {
         }
     }
 
-    fn term_color(&self) -> term::color::Color {
-        match self.data {
-            TestResultData::Passed(..) => term::color::BRIGHT_GREEN,
-            TestResultData::Regressed(..) => term::color::BRIGHT_RED,
-            TestResultData::Broken(_) => term::color::BRIGHT_YELLOW,
-            TestResultData::Error(_) => term::color::BRIGHT_MAGENTA
-        }
-    }
-
     fn html_class(&self) -> &'static str {
         self.quick_str()
     }
@@ -581,8 +572,7 @@ fn report_quick_result(current_num: usize, total: usize, result: &TestResult) {
                result.rev_dep.name,
                result.rev_dep.vers
                );
-        print_color(&format!("{}", result.quick_str()),
-                    result.term_color());
+        print_color(&format!("{}", result.quick_str()), result.into());
         println!("");
     });
 }
@@ -716,19 +706,43 @@ fn sanitize(s: &str) -> String {
     }).collect()
 }
 
+enum ReportResult { Passed, Regressed, Broken, Error }
+
+impl Into<term::color::Color> for ReportResult {
+    fn into(self) -> term::color::Color {
+        match self {
+            ReportResult::Passed => term::color::BRIGHT_GREEN,
+            ReportResult::Regressed => term::color::BRIGHT_RED,
+            ReportResult::Broken => term::color::BRIGHT_YELLOW,
+            ReportResult::Error => term::color::BRIGHT_MAGENTA,
+        }
+    }
+}
+
+impl<'a> Into<term::color::Color> for &'a TestResult {
+    fn into(self) -> term::color::Color {
+        match self.data {
+            TestResultData::Passed(..) => ReportResult::Passed,
+            TestResultData::Regressed(..) => ReportResult::Regressed,
+            TestResultData::Broken(_) => ReportResult::Broken,
+            TestResultData::Error(_) => ReportResult::Error,
+        }.into()
+    }
+}
+
 fn report_success(s: Summary, p: PathBuf) {
     println!("");
     print!("passed: ");
-    print_color(&format!("{}", s.passed), term::color::BRIGHT_GREEN);
+    print_color(&format!("{}", s.passed), ReportResult::Passed.into());
     println!("");
     print!("regressed: ");
-    print_color(&format!("{}", s.regressed), term::color::BRIGHT_RED);
+    print_color(&format!("{}", s.regressed), ReportResult::Regressed.into());
     println!("");
     print!("broken: ");
-    print_color(&format!("{}", s.broken), term::color::BRIGHT_YELLOW);
+    print_color(&format!("{}", s.broken), ReportResult::Broken.into());
     println!("");
     print!("error: ");
-    print_color(&format!("{}", s.error), term::color::BRIGHT_MAGENTA);
+    print_color(&format!("{}", s.error), ReportResult::Error.into());
     println!("");
 
     println!("");
