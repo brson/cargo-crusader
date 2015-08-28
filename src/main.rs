@@ -141,22 +141,54 @@ fn load_string(path: &Path) -> Result<String, Error> {
 type RevDepName = String;
 
 fn crate_url(krate: &str, call: Option<&str>) -> String {
+    crate_url_with_parms(krate, call, &[])
+}
+
+fn crate_url_with_parms(krate: &str, call: Option<&str>, parms: &[(&str, &str)]) -> String {
     let url = format!("https://crates.io/api/v1/crates/{}", krate);
-    match call {
+    let s = match call {
         Some(c) => format!("{}/{}", url, c),
         None => url
+    };
+
+    if !parms.is_empty() {
+        let parms: Vec<String> = parms.iter().map(|&(k, v)| format!("{}={}", k, v)).collect();
+        let parms: String = parms.connect("&");
+        format!("{}?{}", s, parms)
+    } else {
+        s
     }
 }
 
 fn get_rev_deps(crate_name: &str) -> Result<Vec<RevDepName>, Error> {
-    status(&format!("downloading reverse deps for {}", crate_name));
-    let ref url = crate_url(crate_name, Some("reverse_dependencies"));
-    let ref body = try!(http_get_to_string(url));
-    let rev_deps = try!(parse_rev_deps(body));
+    let mut all_deps = Vec::new();
 
-    status(&format!("{} reverse deps", rev_deps.len()));
+    let crates_per_page = 100;
+    let mut page = 1;
 
-    Ok(rev_deps)
+    loop {
+        status(&format!("downloading reverse deps for {}", crate_name));
+        let ref url = crate_url_with_parms(crate_name, Some("reverse_dependencies"),
+                                           &[("per_page", "100"),
+                                             ("page", &page.to_string())]);
+        println!("{}", url);
+        let ref body = try!(http_get_to_string(url));
+        let rev_deps = try!(parse_rev_deps(body));
+
+        let len = rev_deps.len();
+
+        all_deps.extend(rev_deps.into_iter());
+
+        if len < crates_per_page {
+            break;
+        }
+
+        page += 1;
+    }
+
+    status(&format!("{} reverse deps", all_deps.len()));
+
+    Ok(all_deps)
 }
 
 fn http_get_to_string(url: &str) -> Result<String, Error> {
