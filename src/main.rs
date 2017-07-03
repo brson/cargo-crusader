@@ -22,8 +22,7 @@ extern crate threadpool;
 extern crate num_cpus;
 extern crate tempdir;
 
-use curl::{http, ErrCode};
-use curl::http::Response as CurlHttpResponse;
+use curl::easy::Easy;
 use rustc_serialize::json;
 use semver::Version;
 use std::convert::From;
@@ -86,8 +85,6 @@ enum CrateOverride {
     Default,
     Source(PathBuf)
 }
-
-type VersionNumber = String;
 
 fn get_config() -> Result<Config, Error> {
     let manifest = env::var("CRUSADER_MANIFEST");
@@ -153,7 +150,7 @@ fn crate_url_with_parms(krate: &str, call: Option<&str>, parms: &[(&str, &str)])
 
     if !parms.is_empty() {
         let parms: Vec<String> = parms.iter().map(|&(k, v)| format!("{}={}", k, v)).collect();
-        let parms: String = parms.connect("&");
+        let parms: String = parms.join("&");
         format!("{}?{}", s, parms)
     } else {
         s
@@ -196,29 +193,21 @@ fn http_get_to_string(url: &str) -> Result<String, Error> {
 }
 
 fn http_get_bytes(url: &str) -> Result<Vec<u8>, Error> {
-    let resp = try!(http::handle().get(url).exec());
+    let mut data: Vec<u8> = Vec::new();
+    let mut handle = Easy::new();
+    handle.url(url)?;
 
-    if resp.get_code() == 302 {
-        debug!("following 302 HTTP response");
-        // Resource moved
-        if let Some(l) = resp.get_headers().get("location") {
-            if l.len() > 0 {
-                let url = l[0].clone();
-                let resp = try!(http::handle().get(url).exec());
-                if resp.get_code() != 200 {
-                    return Err(Error::HttpError(CurlHttpResponseWrapper(resp)));
-                } else {
-                    return Ok(resp.move_body());
-                }
-            }
-        }
+    {
+        let mut transfer = handle.transfer();
+        transfer.write_function(|d: &[u8]| {
+            data.extend(d);
+            Ok(d.len())
+        })?;
 
-        return Err(Error::HttpError(CurlHttpResponseWrapper(resp)));
-    } else if resp.get_code() != 200 {
-        return Err(Error::HttpError(CurlHttpResponseWrapper(resp)));
+        transfer.perform()?;
     }
 
-    Ok(resp.move_body())
+    Ok(data)
 }
 
 fn parse_rev_deps(s: &str) -> Result<Vec<RevDepName>, Error> {
@@ -813,8 +802,7 @@ enum Error {
     SemverError(semver::ParseError),
     TomlError(Vec<toml::ParserError>),
     IoError(io::Error),
-    CurlError(curl::ErrCode),
-    HttpError(CurlHttpResponseWrapper),
+    CurlError(curl::Error),
     Utf8Error(Utf8Error),
     JsonDecode(json::DecoderError),
     RecvError(RecvError),
@@ -835,23 +823,11 @@ macro_rules! convert_error {
 
 convert_error!(semver::ParseError, SemverError);
 convert_error!(io::Error, IoError);
-convert_error!(curl::ErrCode, CurlError);
+convert_error!(curl::Error, CurlError);
 convert_error!(Utf8Error, Utf8Error);
 convert_error!(json::DecoderError, JsonDecode);
 convert_error!(RecvError, RecvError);
 convert_error!(FromUtf8Error, FromUtf8Error);
-
-struct CurlHttpResponseWrapper(CurlHttpResponse);
-
-impl fmt::Debug for CurlHttpResponseWrapper {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        let CurlHttpResponseWrapper(ref resp) = *self;
-        let tup = (resp.get_code(), resp.get_headers(), resp.get_body());
-        try!(fmt.write_str(&format!("{:?}", tup)));
-
-        Ok(())
-    }
-}
 
 impl fmt::Display for Error {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> Result<(), fmt::Error> {
@@ -860,8 +836,7 @@ impl fmt::Display for Error {
             Error::SemverError(ref e) => e.fmt(fmt),
             Error::TomlError(_) => fmt.write_str(self.description()),
             Error::IoError(ref e) => e.fmt(fmt),
-            Error::CurlError(c) => c.fmt(fmt),
-            Error::HttpError(CurlHttpResponseWrapper(ref r)) => r.fmt(fmt),
+            Error::CurlError(ref c) => c.fmt(fmt),
             Error::Utf8Error(ref e) => e.fmt(fmt),
             Error::JsonDecode(ref e) => e.fmt(fmt),
             Error::RecvError(ref e) => e.fmt(fmt),
@@ -880,7 +855,6 @@ impl StdError for Error {
             Error::TomlError(_) => "error parsing TOML",
             Error::IoError(ref e) => e.description(),
             Error::CurlError(_) => "curl error",
-            Error::HttpError(_) => "HTTP error",
             Error::Utf8Error(ref e) => e.description(),
             Error::JsonDecode(ref e) => e.description(),
             Error::RecvError(ref e) => e.description(),
