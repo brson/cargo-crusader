@@ -1,6 +1,6 @@
 [package]
 name = "cargo-crusader"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Brian Anderson <banderson@mozilla.com>"]
 description = "Test the downstream impact of crate changes before publishing"
 license = "MIT/Apache-2.0"
@@ -12,7 +12,7 @@ toml = "0.1.21"
 log = "0.3.1"
 env_logger = "0.3.1"
 curl = "0.4.7"
-rustc-serialize = "0.3.16"
+rustc-serialize = "0.3.24"
 threadpool = "0.1.4"
 num_cpus = "0.2.6"
 tempdir = "0.3.4"
